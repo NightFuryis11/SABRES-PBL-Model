@@ -1,0 +1,7 @@
+netCDF4
+numpy
+siphon
+pint
+timezonefinder
+pandas
+scipy
