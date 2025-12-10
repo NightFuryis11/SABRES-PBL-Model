@@ -227,9 +227,21 @@ def ingest_1d(config : dict, input_data_time : datetime, input_vals : dict) -> s
     theta_star_var.units = "K"
     DS["theta_star"][0] = 0
 
-    sw_in_var = DS.createVariable("incoming_solar_radiation", np.float32, ("time"))
+    r_v_star_var = DS.createVariable("r_v_star", np.float32, ("time"))
+    r_v_star_var.units = "kg kg^(-1)"
+    DS["r_v_star"][0] = 0
+
+    sw_in_var = DS.createVariable("incoming_solar_radiation", np.float64, ("time"))
     sw_in_var.units = "W m^(-2)"
     DS["incoming_solar_radiation"][0] = 0
+
+    irr_var = DS.createVariable("net_irradiance", np.float64, ("time", "z"))
+    irr_var.units = "W m^(-2)"
+    DS["net_irradiance"][0,:] = np.zeros(interp_z.m.size)[:]
+
+    #M_var = DS.createVariable("transmitting_exitance", np.float64, ("time", "dz"))
+    #M_var.units = "W m^(-1)"
+    #DS["transmitting_exitance"][0,:] = np.zeros(interp_z.m.size-1)[:]
 
     L_var = DS.createVariable("monin_obukhov_length_scale", np.float32, ("time"))
     L_var.units = "m"
@@ -247,21 +259,17 @@ def ingest_1d(config : dict, input_data_time : datetime, input_vals : dict) -> s
     r_v_var.units = "kg kg^(-1)"
     DS["mixing_ratio"][0,:] = interp_r_v[:]
 
+    rho_var = DS.createVariable("density", np.float32, ("time", "z"))
+    rho_var.units = "kg m^(-3)"
+    DS["density"][0,:] = interp_p[:] / (physics.R_d * interp_T[:] * (1 + 0.608 * interp_r_v[:]))
+
     r_vs_var = DS.createVariable("saturation_mixing_ratio", np.float32, ("time", "z"))
     r_vs_var.units = "kg kg^(-1)"
-    DS["saturation_mixing_ratio"][0,:] = dynamics.calc_e_s(interp_T[:])
+    DS["saturation_mixing_ratio"][0,:] = dynamics.r_v_from_e(dynamics.calc_e_s(interp_T[:]), interp_p[:])
 
     theta_var = DS.createVariable("potential_temperature", np.float32, ("time", "z"))
     theta_var.units = "K"
     DS["potential_temperature"][0,:] = interp_theta[:]
-
-    T_g_var = DS.createVariable("surface_temperature", np.float32, ("time"))
-    T_g_var.units = "K"
-    DS["surface_temperature"][0] = dynamics.poissons_theta_to_T(DS["potential_temperature"][0,0], DS["pressure"][0,0], DS["mixing_ratio"][0,0])
-
-    dT_g_var = DS.createVariable("dTdt", np.float32, ("time"))
-    dT_g_var.units = "K s^(-1)"
-    DS["dTdt"][0] = 0
 
     sw_red_var = DS.createVariable("shortwave_reduction", np.float32, ("time"))
     DS["shortwave_reduction"][0] = 0
@@ -269,6 +277,10 @@ def ingest_1d(config : dict, input_data_time : datetime, input_vals : dict) -> s
     dpdt_var = DS.createVariable("dpdt", np.float32, ("time", "z"))
     dpdt_var.units = "Pa s^(-1)"
     DS["dpdt"][0,:] = np.zeros(interp_z.m.size)[:]
+
+    e_var = DS.createVariable("vapor_pressure", np.float32, ("time", "z"))
+    e_var.units = "Pa"
+    DS["vapor_pressure"][0,:] = dynamics.e_from_r_v(interp_r_v[:], interp_p[:])
 
     u_g_var = DS.createVariable("u-component_of_geostrophic_wind", np.float32, ("time", "z"))
     u_g_var.units = "m s^(-1)"
@@ -286,6 +298,30 @@ def ingest_1d(config : dict, input_data_time : datetime, input_vals : dict) -> s
     v_bar_var.units = "m s^(-1)"
     DS["v-component_of_mean_wind"][0,:] = interp_v_bar[:]
 
+    u_ag_var = DS.createVariable("u-component_of_ageostrophic_wind", np.float32, ("time", "z"))
+    u_ag_var.units = "m s^(-1)"
+    DS["u-component_of_ageostrophic_wind"][0,:] = interp_u_bar[:] - interp_u_g[:]
+
+    v_ag_var = DS.createVariable("v-component_of_ageostrophic_wind", np.float32, ("time", "z"))
+    v_ag_var.units = "m s^(-1)"
+    DS["v-component_of_ageostrophic_wind"][0,:] = interp_v_bar[:] - interp_v_g[:]
+
+    duagdt_var = DS.createVariable("duagdt", np.float32, ("time", "z"))
+    duagdt_var.units = "m s^(-2)"
+    DS["duagdt"][0,:] = np.zeros(interp_z.m.size)[:]
+
+    dvagdt_var = DS.createVariable("dvagdt", np.float32, ("time", "z"))
+    dvagdt_var.units = "m s^(-2)"
+    DS["dvagdt"][0,:] = np.zeros(interp_z.m.size)[:]
+
+    dugdt_var = DS.createVariable("dugdt", np.float32, ("time", "z"))
+    dugdt_var.units = "m s^(-2)"
+    DS["dugdt"][0,:] = np.zeros(interp_z.m.size)[:]
+
+    dvgdt_var = DS.createVariable("dvgdt", np.float32, ("time", "z"))
+    dvgdt_var.units = "m s^(-2)"
+    DS["dvgdt"][0,:] = np.zeros(interp_z.m.size)[:]
+
     dudt_var = DS.createVariable("dudt", np.float32, ("time", "z"))
     dudt_var.units = "m s^(-2)"
     DS["dudt"][0,:] = np.zeros(interp_z.m.size)[:]
@@ -297,6 +333,10 @@ def ingest_1d(config : dict, input_data_time : datetime, input_vals : dict) -> s
     dthetadt_var = DS.createVariable("dthetadt", np.float32, ("time", "z"))
     dthetadt_var.units = "K s^(-1)"
     DS["dthetadt"][0,:] = np.zeros(interp_z.m.size)[:]
+
+    dTdt_var = DS.createVariable("dTdt", np.float32, ("time", "z"))
+    dTdt_var.units = "K s^(-1)"
+    DS["dTdt"][0,:] = np.zeros(interp_z.m.size)[:]
 
     dr_vdt_var = DS.createVariable("dr_vdt", np.float32, ("time", "z"))
     dr_vdt_var.units = "kg kg^(-1) s^(-1)"
@@ -313,6 +353,14 @@ def ingest_1d(config : dict, input_data_time : datetime, input_vals : dict) -> s
     thetaw_var = DS.createVariable("potential_temperature_flux", np.float32, ("time", "dz"))
     thetaw_var.units = "K m s^(-1)"
     DS["potential_temperature_flux"][0,:] = np.zeros(interp_z.m.size-1)[:]
+
+    r_vw_var = DS.createVariable("moisture_flux", np.float32, ("time", "dz"))
+    r_vw_var.units = "kg m kg^(-1) s^(-1)"
+    DS["moisture_flux"][0,:] = np.zeros(interp_z.m.size-1)[:]
+
+    Tw_var = DS.createVariable("temperature_flux", np.float32, ("time", "dz"))
+    Tw_var.units = "K m s^(-1)"
+    DS["temperature_flux"][0,:] = np.zeros(interp_z.m.size-1)[:]
 
     km_var = DS.createVariable("eddy_momentum_diffusivity", np.float32, ("time", "dz"))
     km_var.units = "m^(2) s^(-1)"
@@ -333,6 +381,10 @@ def ingest_1d(config : dict, input_data_time : datetime, input_vals : dict) -> s
     pthetawpz_var = DS.createVariable("differential_potential_temperature_flux", np.float32, ("time", "z"))
     pthetawpz_var.units = "K s^(-1)"
     DS["differential_potential_temperature_flux"][0,:] = np.zeros(interp_z.m.size)[:]
+
+    pr_vwpt_var = DS.createVariable("differential_moisture_flux", np.float32, ("time", "z"))
+    pr_vwpt_var.units = "kg kg^(-1) s^(-1)"
+    DS["differential_moisture_flux"][0,:] = np.zeros(interp_z.m.size)[:]
 
     DS.close()
     print(f"Successfully ingested data to {filename}")

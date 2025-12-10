@@ -9,7 +9,7 @@ from pint import Quantity
 
 def create_grid(runtime : datetime, input_data_time : datetime, num_heights : int = 160, min_height_change : Quantity = Quantity(50, "m"), max_height_change : Quantity = Quantity(50, "m"), height_change_exponential_base : float = 1.0, ) -> str:
     timestamp = runtime.strftime("%Y-%m-%d_%H-%M-%S")
-    filename = f"PBL_MODEL_INPUT_{timestamp}.nc"
+    filename = f"{os.path.dirname(os.path.realpath(__file__))}/PBL_MODEL_INPUT_{timestamp}.nc"
     DS = NCDF(filename, "w", format='NETCDF4')
 
     time_dim = DS.createDimension("time", None) # Forward-in-time model progression dimension
@@ -44,6 +44,12 @@ def create_grid(runtime : datetime, input_data_time : datetime, num_heights : in
 
     z_layer_var = DS.createVariable("height_layer", np.float32, ("z"))
     DS["height_layer"][:] = np.arange(len(z[:]))
+
+    z_depth_var = DS.createVariable("layer_depth", np.float32, ("z"))
+    z_depth_var.units = "m"
+    DS["layer_depth"][1:-1] = (z[2:] - z[:-2]) / 2
+    DS["layer_depth"][0] = (z[1] - z[0]) / 2
+    DS["layer_depth"][-1] = (z[-1] - z[-2])
 
     dz_var = DS.createVariable("height_change", np.float32, ("dz"))
     dz_var.units = "m"
