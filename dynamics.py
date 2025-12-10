@@ -7,6 +7,11 @@ import warnings
 from scipy import interpolate
 import sys
 from datetime import datetime
+import os
+from netCDF4 import Dataset as NCDF
+import numba as nb
+import math
+import matplotlib.pyplot as plt
 
 warnings.filterwarnings('ignore', category=UnitStrippedWarning)
 
@@ -246,6 +251,13 @@ def r_v_from_e(e : Union[int, float, np.ndarray, Quantity], p : Union[int, float
     r_v = ((physics.R_d/physics.R_v)*e)/(p - e)
     return r_v
 
+def e_from_r_v(r_v : Union[int, float, np.ndarray, Quantity], p : Union[int, float, np.ndarray, Quantity]) -> Quantity:
+    r_v = _ensure_unit_aware_arrays(r_v, "Kg Kg^(-1)")
+    p = _ensure_unit_aware_arrays(p, "Pa")
+
+    e = ((r_v * p)/((physics.R_d/physics.R_v) + r_v))
+    return e
+
 def r_v_from_T_d(T_d : Union[int, float, np.ndarray, Quantity], p : Union[int, float, np.ndarray, Quantity]) -> Quantity:
     T_d = _ensure_unit_aware_arrays(T_d, "K")
     p = _ensure_unit_aware_arrays(p, "Pa")
@@ -276,20 +288,16 @@ def e_from_rho_v(rho_v : Union[int, float, np.ndarray, Quantity], T : Union[int,
     e = rho_v * physics.R_v * T
     return e
 
-def Coriolis_u(lat : float, v_bar : Union[int, float, np.ndarray, Quantity], v_g : Union[int, float, np.ndarray, Quantity]) -> Quantity:
-    v_bar = _ensure_unit_aware_arrays(v_bar, "m s^(-1)")
-    v_g = _ensure_unit_aware_arrays(v_g, "m s^(-1)")
+def Coriolis_u(lat : float, v_ag : Union[int, float, np.ndarray, Quantity]) -> Quantity:
+    v_ag = _ensure_unit_aware_arrays(v_ag, "m s^(-1)")
     
     f = 2 * physics.omega * np.sin(np.deg2rad(lat))
-    v_ag = v_bar - v_g
     return f * v_ag
 
-def Coriolis_v(lat : float, u_bar : Union[int, float, np.ndarray, Quantity], u_g : Union[int, float, np.ndarray, Quantity]) -> Quantity:
-    u_bar = _ensure_unit_aware_arrays(u_bar, "m s^(-1)")
-    u_g = _ensure_unit_aware_arrays(u_g, "m s^(-1)")
+def Coriolis_v(lat : float, u_ag : Union[int, float, np.ndarray, Quantity]) -> Quantity:
+    u_ag = _ensure_unit_aware_arrays(u_ag, "m s^(-1)")
     
     f = 2 * physics.omega * np.sin(np.deg2rad(lat))
-    u_ag = u_bar - u_g
     return -f * u_ag
 
 
@@ -470,9 +478,11 @@ def fluxes_surface_layer(theta_bar_field : Union[int, float, np.ndarray, Quantit
     #sys.exit()
     return uw, vw, thetaw
 
-def stars_alt(theta_z : Union[int, float, np.ndarray, Quantity], theta_g : Union[int, float, np.ndarray, Quantity], z_s : Union[int, float, np.ndarray, Quantity], z_0 : Union[int, float, np.ndarray, Quantity], u_bar : Union[int, float, np.ndarray, Quantity], v_bar : Union[int, float, np.ndarray, Quantity]) -> Quantity:
+def stars_alt(theta_z : Union[int, float, np.ndarray, Quantity], theta_g : Union[int, float, np.ndarray, Quantity], r_v_z : Union[int, float, np.ndarray, Quantity], r_v_g : Union[int, float, np.ndarray, Quantity], z_s : Union[int, float, np.ndarray, Quantity], z_0 : Union[int, float, np.ndarray, Quantity], u_bar : Union[int, float, np.ndarray, Quantity], v_bar : Union[int, float, np.ndarray, Quantity]) -> Quantity:
     theta_z = _ensure_unit_aware_arrays(theta_z, "K")
     theta_g = _ensure_unit_aware_arrays(theta_g, "K")
+    r_v_z = _ensure_unit_aware_arrays(r_v_z, "kg kg^(-1)")
+    r_v_g = _ensure_unit_aware_arrays(r_v_g, "kg kg^(-1)")
     z_s = _ensure_unit_aware_arrays(z_s, "m")
     z_0 = _ensure_unit_aware_arrays(z_0, "m")
     u_bar = _ensure_unit_aware_arrays(u_bar, "m s^(-1)")
@@ -505,15 +515,18 @@ def stars_alt(theta_z : Union[int, float, np.ndarray, Quantity], theta_g : Union
     u_star = np.sqrt(u_star_squared) * np.sign(F_m)
     if u_star.m == 0:
         theta_star = Quantity(0, "K")
+        r_v_star = Quantity(0, "kg kg^(-1)")
     else:
         theta_star = ((drag/drag_ratio) * V * (theta_z - theta_g) * F_h)/u_star
+        r_v_star = ((drag/drag_ratio) * V * (r_v_z - r_v_g) * F_h)/u_star
     theta_star = Quantity(theta_star, "K")
 
-    return u_star, theta_star
+    return u_star, theta_star, r_v_star
 
-def fluxes_surface_layer_alt(u_star : Union[int, float, np.ndarray, Quantity], theta_star : Union[int, float, np.ndarray, Quantity], u_z_s : Union[int, float, np.ndarray, Quantity], v_z_s : Union[int, float, np.ndarray, Quantity]) -> tuple[Quantity]:
+def fluxes_surface_layer_alt(u_star : Union[int, float, np.ndarray, Quantity], theta_star : Union[int, float, np.ndarray, Quantity], r_v_star : Union[int, float, np.ndarray, Quantity], u_z_s : Union[int, float, np.ndarray, Quantity], v_z_s : Union[int, float, np.ndarray, Quantity]) -> tuple[Quantity]:
     u_star = _ensure_unit_aware_arrays(u_star, "m s^(-1)")
     theta_star = _ensure_unit_aware_arrays(theta_star, "K")
+    r_v_star = _ensure_unit_aware_arrays(r_v_star, "K")
     u_z_s = _ensure_unit_aware_arrays(u_z_s, "m s^(-1)")
     v_z_s = _ensure_unit_aware_arrays(v_z_s, "m s^(-1)")
 
@@ -522,8 +535,9 @@ def fluxes_surface_layer_alt(u_star : Union[int, float, np.ndarray, Quantity], t
     uw = -u_star**2 * np.cos(mu)
     vw = -u_star**2 * np.sin(mu)
     thetaw = -u_star * theta_star
+    r_vw = -u_star * r_v_star
 
-    return uw, vw, thetaw
+    return uw, vw, thetaw, r_vw
 
 def bulk_richardson_layer(theta_bar : Union[int, float, np.ndarray, Quantity], dthetadz : Union[int, float, np.ndarray, Quantity], dudz : Union[int, float, np.ndarray, Quantity], dvdz : Union[int, float, np.ndarray, Quantity]) -> Quantity:
     theta_bar = _ensure_unit_aware_arrays(theta_bar, "K")
@@ -552,8 +566,13 @@ def boundary_layer_height_tendency(u_star : Union[int, float, np.ndarray, Quanti
     f = 2 * physics.omega * np.sin(np.deg2rad(lat))
 
     w_star = wstar(theta_z_s, u_star, theta_star, z_s)
-
     dz_idt = (1.8 * (w_star**3 + 1.1 * u_star**3 - 3.3 * u_star**2 * f * z_i))/(physics.g_0 * (z_i**2/theta_z_s) * dtheta_idz + 9 * w_star**2 + 7.2 * u_star**2)
+
+    #if theta_star.m <= 0:
+    #    w_star = wstar(theta_z_s, u_star, theta_star, z_s)
+    #    dz_idt = (1.8 * (w_star**3 + 1.1 * u_star**3 - 3.3 * u_star**2 * f * z_i))/(physics.g_0 * (z_i**2/theta_z_s) * dtheta_idz + 9 * w_star**2 + 7.2 * u_star**2)
+    #else:
+    #    dz_idt = 0.06 * ((u_star**2)/(z_i * f)) * (1 - ((3.3 * z_i * f)/u_star)**3)
     return dz_idt
 
 def wstar(theta_z : Union[int, float, np.ndarray, Quantity], u_star : Union[int, float, np.ndarray, Quantity], theta_star : Union[int, float, np.ndarray, Quantity], z : Union[int, float, np.ndarray, Quantity]) -> Quantity:
@@ -671,29 +690,28 @@ def eddy_heat_diffusivity(theta_field : Union[int, float, np.ndarray, Quantity],
 
     return K_h
 
-def ground_temperature_tendency(theta_1 : Union[int, float, np.ndarray, Quantity], u_star : Union[int, float, np.ndarray, Quantity], theta_star : Union[int, float, np.ndarray, Quantity], z_field : Union[int, float, np.ndarray, Quantity], T_g : Union[int, float, np.ndarray, Quantity], z_s : Union[int, float, np.ndarray, Quantity], z_0 : Union[int, float, np.ndarray, Quantity], p_field : Union[int, float, np.ndarray, Quantity], r_v_1 : Union[int, float, np.ndarray, Quantity], soil_emissivity : Union[int, float, np.ndarray, Quantity], soil_density : Union[int, float, np.ndarray, Quantity], soil_heat_capacity : Union[int, float, np.ndarray, Quantity], soil_depth : Union[int, float, np.ndarray, Quantity], shortwave_reduction : float, current_model_time : datetime, lat : float) -> Quantity:
-    theta_1 = _ensure_unit_aware_arrays(theta_1, "K")
-    theta_star = _ensure_unit_aware_arrays(theta_star, "K")
+def ground_temperature_tendency(T_1 : Union[int, float, np.ndarray, Quantity], u_star : Union[int, float, np.ndarray, Quantity], theta_star : Union[int, float, np.ndarray, Quantity], T_g : Union[int, float, np.ndarray, Quantity], p_1 : Union[int, float, np.ndarray, Quantity], air_emissivity  : Union[int, float, np.ndarray, Quantity], soil_emissivity : Union[int, float, np.ndarray, Quantity], soil_density : Union[int, float, np.ndarray, Quantity], soil_heat_capacity : Union[int, float, np.ndarray, Quantity], soil_depth : Union[int, float, np.ndarray, Quantity], shortwave_reduction : float, current_model_time : datetime, lat : float) -> Quantity:
+    T_1 = _ensure_unit_aware_arrays(T_1, "K")
     u_star = _ensure_unit_aware_arrays(u_star, "m s^(-1)")
-    z_field = _ensure_unit_aware_arrays(z_field, "m")
+    theta_star = _ensure_unit_aware_arrays(theta_star, "K")
     T_g = _ensure_unit_aware_arrays(T_g, "K")
-    z_s = _ensure_unit_aware_arrays(z_s, "m")
-    z_0 = _ensure_unit_aware_arrays(z_0, "m")
-    p_field = _ensure_unit_aware_arrays(p_field, "Pa")
-    r_v_1 = _ensure_unit_aware_arrays(r_v_1, "kg kg^(-1)")
+    p_1 = _ensure_unit_aware_arrays(p_1, "Pa")
+    air_emissivity = _ensure_unit_aware_arrays(air_emissivity, "dimensionless")
     soil_emissivity = _ensure_unit_aware_arrays(soil_emissivity, "dimensionless")
+    soil_density = _ensure_unit_aware_arrays(soil_density, "kg m^(3)")
+    soil_heat_capacity = _ensure_unit_aware_arrays(soil_heat_capacity, "J kg^(-1) K^(-1)")
+    soil_depth = _ensure_unit_aware_arrays(soil_depth, "m")
 
-    T_1 = poissons_theta_to_T(theta_1, p_field[1], r_v_1)
-    sensible_heat_flux = sensible_heat(p_field[1], T_1, u_star, theta_star)
+    sensible_heat_flux = sensible_heat(p_1, T_1, u_star, theta_star)
     incoming_shortwave = ground_incoming_shortwave(current_model_time, lat, shortwave_reduction)
     outgoing_longwave = ground_outgoing_longwave(T_g, soil_emissivity)
-    incoming_longwave = physics.Stefan_Boltzmann * T_1**4
+    absorbed_longwave = soil_emissivity * air_emissivity * physics.Stefan_Boltzmann * T_1**4
 
-    dTgdt = (1/(soil_density * soil_heat_capacity * soil_depth)) * (- sensible_heat_flux + incoming_shortwave + incoming_longwave - outgoing_longwave)
+    dTgdt = (1/(soil_density * soil_heat_capacity * soil_depth)) * (- sensible_heat_flux + incoming_shortwave + absorbed_longwave - outgoing_longwave)
     return dTgdt
 
 def sensible_heat(p_1, T_1, u_star, theta_star) -> Quantity:
-    p_1 = _ensure_unit_aware_arrays(p_1, "Pa")
+    p_1 = _ensure_unit_aware_arrays(p_1, "Pa").to_base_units()
     T_1 = _ensure_unit_aware_arrays(T_1, "K")
     theta_star = _ensure_unit_aware_arrays(theta_star, "K")
     u_star = _ensure_unit_aware_arrays(u_star, "m s^(-1)")
@@ -701,15 +719,15 @@ def sensible_heat(p_1, T_1, u_star, theta_star) -> Quantity:
     H = - (p_1 / (physics.R_d * T_1)) * physics.c_p * u_star * theta_star
     return H
 
-def ground_incoming_shortwave(current_model_time : datetime, lat : float, shortwave_reduction : float) -> Quantity:
+def ground_incoming_shortwave(ToA_incoming_exitance : np.ndarray, current_model_time : datetime, lat : float, shortwave_reduction : float) -> Quantity:
     local_hour = current_model_time.hour + current_model_time.minute / 60 + current_model_time.second / 3600
     solar_declination = -23.44 * np.cos((np.deg2rad(360)/365) * (int(current_model_time.strftime("%j")) + local_hour/24) + 10) # Very simple approximation
     solar_hour_angle = (local_hour - 12) * (360/24)
     solar_zenith_angle = np.arccos(np.sin(np.deg2rad(lat)) * np.sin(np.deg2rad(solar_declination)) + np.cos(np.deg2rad(lat)) * np.cos(np.deg2rad(solar_declination)) * np.cos(np.deg2rad(solar_hour_angle)))
     if Quantity(-90, "degree") <= np.rad2deg(solar_zenith_angle) <= Quantity(90, "degree"):
-        incoming_shortwave = physics.S_0 * (0.6 * np.cos(solar_zenith_angle) + 0.2 * np.cos(solar_zenith_angle)**2)  * (1 - shortwave_reduction)
+        incoming_shortwave = ToA_incoming_exitance * (0.6 * np.cos(solar_zenith_angle) + 0.2 * np.cos(solar_zenith_angle)**2)  * (1 - shortwave_reduction)
     else:
-        incoming_shortwave = Quantity(0, "W m^(-2)")
+        incoming_shortwave = Quantity(np.zeros_like(ToA_incoming_exitance), "W m^(-1)")
     return incoming_shortwave
 
 def ground_outgoing_longwave(T_g : Union[int, float, np.ndarray, Quantity], soil_emissivity : Union[int, float, np.ndarray, Quantity]) -> Quantity:
@@ -718,6 +736,260 @@ def ground_outgoing_longwave(T_g : Union[int, float, np.ndarray, Quantity], soil
 
     LW_out = soil_emissivity * physics.Stefan_Boltzmann * T_g**4
     return LW_out
+
+def longwave_radiative_transfer(T : Union[int, float, np.ndarray, Quantity], air_emissivity : float, soil_emissivity : float) -> Quantity:
+    T = _ensure_unit_aware_arrays(T, "K")
+
+    F_net = np.zeros(T.size)
+    F_net[0] =  - physics.Stefan_Boltzmann * soil_emissivity * T[0]**4 + physics.Stefan_Boltzmann * soil_emissivity * air_emissivity * T[1]**4
+    F_net[1] = - 2 * physics.Stefan_Boltzmann.m * air_emissivity * T[1].m**4 + physics.Stefan_Boltzmann * soil_emissivity * air_emissivity * T[0]**4 + physics.Stefan_Boltzmann * air_emissivity**2 * T[2]**4
+    F_net[2:-1] = - 2 * physics.Stefan_Boltzmann.m * air_emissivity * T[2:-1].m**4 + physics.Stefan_Boltzmann * air_emissivity**2 * (np.roll(T, 1)[2:-1]**4 + np.roll(T, -1)[2:-1]**4)
+    F_net[-1] = Quantity(0, "W m^(-2)")
+
+    return F_net
+
+def longwave_radiative_transfer_effective_layer(T : Union[int, float, np.ndarray, Quantity], air_emissivity : float, soil_emissivity : float, layer_ground_dist : np.ndarray, effective_radiative_layer_dist : np.ndarray) -> Quantity:
+    T = _ensure_unit_aware_arrays(T, "K")
+
+    F_net = np.zeros(T.size)
+    Temps2d = np.tile(T, (T.size, 1))
+    h = int(np.nanmax(effective_radiative_layer_dist))
+    Temps2d = np.pad(Temps2d, [(0,0), (0,h+1)], mode = "edge")
+        
+    air_contrib = np.nansum(Temps2d**4 * (1 - air_emissivity)**effective_radiative_layer_dist, axis = 1)
+    
+    ground_contrib = T[0]**4 * (1 - air_emissivity)**(layer_ground_dist[:-h-1] - 1)
+    F_net[0] =  - physics.Stefan_Boltzmann.m * soil_emissivity * T[0].m**4 + physics.Stefan_Boltzmann.m * soil_emissivity * air_emissivity * air_contrib[0].m
+    F_net[1:] = - 2 * physics.Stefan_Boltzmann.m * air_emissivity * T[1:].m**4 + physics.Stefan_Boltzmann.m * air_emissivity**2 * air_contrib[1:].m + physics.Stefan_Boltzmann.m * soil_emissivity * air_emissivity * ground_contrib[1:].m
+    F_net = Quantity(F_net, "W m^(-2)")
+
+    return F_net
+
+def get_emissivity(min_wavenumber : Union[int, float, np.ndarray, Quantity], max_wavenumber : Union[int, float, np.ndarray, Quantity], gasses = list[str]) -> list[np.ndarray]:
+    ret = []
+    dr = os.path.dirname(os.path.realpath(__file__))
+    Data = NCDF(f"{dr}/radiation-data/radiation.nc", "r", format='NETCDF4')
+    wavenumber = Quantity(Data["wavenumber"][:], "m^(-1)")
+    selection = (wavenumber >= min_wavenumber) & (wavenumber <= max_wavenumber)
+
+    for gas in gasses:
+        ret.append(Data[f"{gas.upper()}_absorbtivity_smoothed"][selection])
+
+    return ret, wavenumber[selection]
+
+def get_absorbtion_coefficient(min_wavenumber : Union[int, float, np.ndarray, Quantity], max_wavenumber : Union[int, float, np.ndarray, Quantity], gasses = list[str]) -> list[np.ndarray]:
+    ret = []
+    dr = os.path.dirname(os.path.realpath(__file__))
+    Data = NCDF(f"{dr}/radiation-data/radiation.nc", "r", format='NETCDF4')
+    wavenumber = Quantity(Data["wavenumber"][:], "m^(-1)")
+    selection = (wavenumber >= min_wavenumber) & (wavenumber <= max_wavenumber)
+
+    for gas in gasses:
+        ret.append(Data[f"{gas.upper()}_absorbtion_coefficient"][selection])
+
+    return ret, wavenumber[selection]
+
+def weighted_absorbtion_coefficients(e : Union[int, float, np.ndarray, Quantity], p : Union[int, float, np.ndarray, Quantity], absorbtion_coefficient_CO2 : np.ndarray, absorbtion_coefficient_H2O : np.ndarray, absorbtion_coefficient_O2 : np.ndarray, absorbtion_coefficient_N2 : np.ndarray) -> np.ndarray:
+    e = _ensure_unit_aware_arrays(e, "Pa")
+    p = _ensure_unit_aware_arrays(p, "Pa")
+
+    p_2d = np.tile(p, (absorbtion_coefficient_N2.size, 1))
+    #p_2d = (p_2d[:,1:] + p_2d[:,:-1]) / 2
+    e_2d = np.tile(e, (absorbtion_coefficient_N2.size, 1))
+    #e_2d = (e_2d[:,1:] + e_2d[:,:-1]) / 2
+
+    absorbtion_coefficient_N2_2d = np.tile(absorbtion_coefficient_N2, (e.size, 1)).transpose()
+    absorbtion_coefficient_O2_2d = np.tile(absorbtion_coefficient_O2, (e.size, 1)).transpose()
+    absorbtion_coefficient_CO2_2d = np.tile(absorbtion_coefficient_CO2, (e.size, 1)).transpose()
+    absorbtion_coefficient_H2O_2d = np.tile(absorbtion_coefficient_H2O, (e.size, 1)).transpose()
+
+    tau = (((p_2d - e_2d)/p_2d) * 0.000426 * absorbtion_coefficient_CO2_2d) + (((p_2d - e_2d)/p_2d) * 0.78084 * absorbtion_coefficient_N2_2d) + (((p_2d - e_2d)/p_2d) * 0.20948 * absorbtion_coefficient_O2_2d) + ((e_2d/p_2d) * absorbtion_coefficient_H2O_2d)
+
+    return tau.m
+
+def ozone_absorbtion_coefficients(ozone_layer_average_ozone : float, ozone_layer_average_water_vapor : float, absorbtion_coefficient_CO2 : np.ndarray, absorbtion_coefficient_H2O : np.ndarray, absorbtion_coefficient_O2 : np.ndarray, absorbtion_coefficient_N2 : np.ndarray, absorbtion_coefficient_O3 : np.ndarray) -> np.ndarray:
+
+    tau = 0.000426 * absorbtion_coefficient_CO2 + 0.78084 * absorbtion_coefficient_N2 + 0.20948 * absorbtion_coefficient_O2 + ozone_layer_average_water_vapor * absorbtion_coefficient_H2O + ozone_layer_average_ozone * absorbtion_coefficient_O3
+
+    return tau
+
+def point_to_point_exitance(T : Union[int, float, np.ndarray, Quantity], layer_depth : Union[int, float, np.ndarray, Quantity], ground_emissivity : float, absorbtion_coefficients : Union[int, float, np.ndarray, Quantity], wavenumber : Union[int, float, np.ndarray, Quantity], M_in : np.ndarray, ozone_absorbtion_coeff : np.ndarray, ozone_layer_temperature : float, ozone_layer_depth : float) -> Quantity:
+    #T = _ensure_unit_aware_arrays(T, "K")
+    #layer_depth = _ensure_unit_aware_arrays(layer_depth, "m")
+    #absorbtion_coefficients = _ensure_unit_aware_arrays(absorbtion_coefficients, "dimensionless")
+
+    M = spectral_exitance(T, wavenumber)
+
+    #M_path_upwards = np.zeros((M.shape[0], M.shape[1]-1))
+    #M_path_downwards = np.zeros((M.shape[0], M.shape[1]-1))
+    M_net = np.zeros_like(M)
+    transmittance = np.exp(-absorbtion_coefficients*(layer_depth[np.newaxis,:]))
+    ozone_transmittance = np.exp(-ozone_absorbtion_coeff*ozone_layer_depth)
+    ozone_emission = spectral_exitance(np.array(ozone_layer_temperature, ndmin = 1), wavenumber)
+    absobrtivity = 1 - transmittance
+
+    up = M[:,0] * ground_emissivity
+    M_net[:,0] = -M[:,0] * ground_emissivity
+    for i in range(1, layer_depth.size - 1):
+        transmitted = up * transmittance[:,i]
+        produced = M[:,i] * absobrtivity[:,i]
+        absorbed = up * absobrtivity[:,i]
+        up = transmitted + produced
+        M_net[:,i] = absorbed - produced
+    
+
+
+    down = M_in[:,0] * ozone_transmittance + ozone_emission[:,0] * (1 - ozone_transmittance)
+    M_net[:,-1] = down * absobrtivity[:,-1]
+    down = down * transmittance[:,-1] + M[:,-1] * absobrtivity[:,-1]
+    for i in range(layer_depth.size-1, 0, -1):
+        transmitted = down * transmittance[:,i]
+        produced = M[:,i] * absobrtivity[:,i]
+        absorbed = down * absobrtivity[:,i]
+        down = transmitted + produced
+        M_net[:,i] = M_net[:,i] + (absorbed - produced)
+
+    absorbed = down * ground_emissivity
+    M_net[:,0] = M_net[:,0] + (absorbed)
+
+    return Quantity(M_net, "W m^(-1)")
+
+def weighted_absorbtivity_spectra(e : Union[int, float, np.ndarray, Quantity], p : Union[int, float, np.ndarray, Quantity], emissivity_CO2 : np.ndarray, emissivity_H2O : np.ndarray, emissivity_O2 : np.ndarray, emissivity_N2 : np.ndarray) -> Quantity:
+    e = _ensure_unit_aware_arrays(e, "Pa")
+    p = _ensure_unit_aware_arrays(p, "Pa")
+
+    p_2d = np.tile(p, (emissivity_N2.size, 1))
+    e_2d = np.tile(e, (emissivity_N2.size, 1))
+    emissivity_N2_2d = np.tile(emissivity_N2, (e.size, 1)).transpose()
+    emissivity_O2_2d = np.tile(emissivity_O2, (e.size, 1)).transpose()
+    emissivity_CO2_2d = np.tile(emissivity_CO2, (e.size, 1)).transpose()
+    emissivity_H2O_2d = np.tile(emissivity_H2O, (e.size, 1)).transpose()
+
+    absorbtivity_spectra = 1 - np.e**(-(-((((p_2d - e_2d)/p_2d) * 0.000426)[:,:] * np.log(1-emissivity_CO2_2d[:,:]+0.000000001))-((((p_2d - e_2d)/p_2d) * 0.78084)[:,:] * np.log(1-emissivity_N2_2d[:,:]+0.000000001))-((((p_2d - e_2d)/p_2d) * 0.20948)[:,:] * np.log(1-emissivity_O2_2d[:,:]+0.000000001))-((e_2d/p_2d)[:,:] * np.log(1-emissivity_H2O_2d[:,:]+0.000000001))))
+
+    return absorbtivity_spectra
+
+#def weighted_absorbtivity_spectra(e : Union[int, float, np.ndarray, Quantity], p : Union[int, float, np.ndarray, Quantity], emissivity_CO2 : np.ndarray, emissivity_H2O : np.ndarray, emissivity_O2 : np.ndarray, emissivity_N2 : np.ndarray) -> Quantity:
+#    e = _ensure_unit_aware_arrays(e, "Pa")
+#    p = _ensure_unit_aware_arrays(p, "Pa")
+#
+#    absorbtivity_spectra = (((p - e)/p) * 0.78084) * emissivity_N2 + (((p - e)/p) * 0.20948) * emissivity_O2 + (((p - e)/p) * 0.000426) * emissivity_CO2 + (e/p) * emissivity_H2O
+#
+#    return absorbtivity_spectra
+
+@nb.njit(cache=True,fastmath=True,parallel=True)
+def planck(T : np.ndarray, wavenumber : np.ndarray, const_1 : float, const_2 : float) -> np.ndarray:
+    num_layers = T.size
+    num_wn = wavenumber.size
+    B = np.empty((num_wn, num_layers))
+
+    for i in nb.prange(num_wn):
+        wn = wavenumber[i]
+        wn_cubed = wn*wn*wn
+        for j in range(num_layers):
+            exponent = (const_1 * wn)/(T[j])
+            B[i,j] = (const_2 * wn_cubed) / (np.exp(exponent) - 1)
+    
+    return B
+
+def spectral_exitance(T : Union[int, float, np.ndarray], wavenumber : Union[int, float, np.ndarray]) -> Quantity:
+    #T = _ensure_unit_aware_arrays(T, "K")
+    #wavenumber = _ensure_unit_aware_arrays(wavenumber, "m^(-1)")
+
+    B = planck(T, wavenumber, ((physics.Planck * physics.c)/physics.Boltzmann).m, (2 * physics.Planck * physics.c**2).m)
+    M = B * np.pi
+
+    return M
+
+def filtered_exitance(M : Union[int, float, np.ndarray, Quantity], absorbtivity_spectra : np.ndarray) -> Quantity:
+    M = _ensure_unit_aware_arrays(M, "W m^(-1)")
+
+    absorbtivity_spectra2d = np.tile(absorbtivity_spectra, (M.shape[1], 1)).transpose()
+
+    M_prime = M * absorbtivity_spectra2d
+
+    return M_prime
+
+def irradiance(M_prime : Union[int, float, np.ndarray, Quantity]) -> Quantity:
+    M_prime = _ensure_unit_aware_arrays(M_prime, "W m^(-1)")
+
+    I = np.sum(M_prime, axis = 0) * Quantity(10, "cm^(-1)").to("m^(-1)")
+
+    return I
+
+def net_radiant_longwave_power(M_prime : Union[int, float, np.ndarray, Quantity], T_g : Union[int, float, np.ndarray, Quantity], ground_emissivity : float, filters : list[np.ndarray], wavenumber : Union[int, float, np.ndarray, Quantity], air_emissivity : Union[int, float, np.ndarray, Quantity]) -> Quantity:
+    M_prime = _ensure_unit_aware_arrays(M_prime, "W m^(-1)")
+    T_g = _ensure_unit_aware_arrays(T_g, "K")
+    wavenumber = _ensure_unit_aware_arrays(wavenumber, "m^(-1)")
+
+    lower_filter_inner, upper_filter_inner, upper_absorbtive_filter, lower_absorbtive_filter = filters
+
+    weighted_absorbtivity = np.expand_dims(weighted_absorbtivity, axis = 0)
+    weighted_absorbtivity = np.tile(weighted_absorbtivity, (lower_filter_inner.shape[0], 1, 1))
+
+    weighted_absorbtivity = np.expand_dims(weighted_absorbtivity, axis = 3)
+    weighted_absorbtivity = np.tile(weighted_absorbtivity, (1, 1, 1, ()-1))
+
+    weighted_absorbtivity_product_upper = np.where(upper_filter_inner[:,:,:,-1], np.nanprod(1 - np.where(upper_absorbtive_filter[:,:,:,:], weighted_absorbtivity, np.nan), axis = 3), np.nan)
+    weighted_absorbtivity_product_lower = np.where(lower_filter_inner[:,:,:,-1], np.nanprod(1 - np.where(lower_absorbtive_filter[:,:,:,:], weighted_absorbtivity, np.nan), axis = 3), np.nan)
+
+    M_prime = np.expand_dims(M_prime, axis = 0)
+    M_prime = np.tile(M_prime, (lower_filter_inner.shape[0]-1, 1, 1))
+    M_prime_upper = np.where(upper_filter_inner[1:,:,:,-1], M_prime, np.nan)
+    M_prime_lower = np.where(lower_filter_inner[1:,:,:,-1], M_prime, np.nan)
+
+    M_g = spectral_exitance(T_g, wavenumber)
+    M_g = np.expand_dims(M_g, axis = 1)
+    M_g = np.tile(M_g, (1, lower_filter_inner.shape[2]))
+    M_g_prime = ground_emissivity * M_g
+
+    M_prime_prime = np.nansum(weighted_absorbtivity_product_upper[1:,:,:] * M_prime_upper, axis = 0) + np.nansum(weighted_absorbtivity_product_lower[1:,:,:] * M_prime_lower, axis = 0)
+    M_g_prime_prime = np.nansum(weighted_absorbtivity_product_upper[:weighted_absorbtivity_product_upper.shape[2],:,0].transpose() * M_g_prime, axis = 0)
+
+
+    I_prime_air = np.sum(weighted_absorbtivity[0,:,:,-1] * M_prime_prime, axis = 0) * Quantity(1, "cm^(-1)").to_base_units()
+
+    I_prime_g = np.sum(weighted_absorbtivity[0,:,:,-1] * M_g_prime_prime, axis = 0) * Quantity(1, "cm^(-1)").to_base_units()
+
+    P = np.zeros(weighted_absorbtivity.shape[2])
+
+    P[0] = (- irradiance(M_g_prime[:,0]) + ground_emissivity * I_prime_air[1:])# * Quantity(1, "m^2")
+    P[1:] = (- 2 * irradiance(M_prime[1:]) + I_prime_air[1:] + I_prime_g[1:])# * Quantity(1, "m^2")
+
+    del weighted_absorbtivity_product_lower
+    del weighted_absorbtivity_product_upper
+    del M_prime_lower
+    del M_prime_upper
+    del M_prime_prime
+    del M_g_prime
+    del M_g_prime_prime
+
+    return P
+
+def net_irradience_simplified(T : Union[int, float, np.ndarray, Quantity], e : Union[int, float, np.ndarray, Quantity], p : Union[int, float, np.ndarray, Quantity], ground_emissivity : float, epsilon_a : np.ndarray, wavenumber : Union[int, float, np.ndarray, Quantity]) -> Quantity:
+    T = _ensure_unit_aware_arrays(T, "K")
+    e = _ensure_unit_aware_arrays(e, "Pa")
+    p = _ensure_unit_aware_arrays(p, "Pa")
+    wavenumber = _ensure_unit_aware_arrays(wavenumber, "m^(-1)")
+
+
+    M = spectral_exitance(T, wavenumber)
+    #print(M.shape)
+    #print(epsilon_a.shape)
+    M_prime = np.zeros(M.shape)
+    M_prime[:,0] = ground_emissivity * M[:,0].m
+    M_prime[:,1:] = epsilon_a[:,1:] * M[:,1:].m
+    M_prime = Quantity(M_prime, M.units)
+
+    I = np.zeros(M.shape[1])
+    I[0] = - irradiance(M_prime[:,0]).m + ground_emissivity * irradiance(M_prime[:,1]).m
+    I[1] = - 2 * irradiance(M_prime[:,1]).m + irradiance(epsilon_a[:,1] * M_prime[:,0].m).m + irradiance(M_prime[:,2].m).m
+    I[2:-1] = - 2 * irradiance(M_prime[:,2:-1]).m + irradiance(np.roll(M_prime[:,2:-1].m, (0, 1)) + np.roll(M_prime[:,2:-1].m, (0, -1))).m
+    I[-1] = - irradiance(M_prime[:,-1]).m + irradiance(M_prime[:,-2]).m
+
+    I = Quantity(I, "W m^(-2)")
+
+    return I
 
 if __name__ == "__main__":
 

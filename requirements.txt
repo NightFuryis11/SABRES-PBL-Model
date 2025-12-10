@@ -5,3 +5,4 @@ pint
 timezonefinder
 pandas
 scipy
+hitran-api
