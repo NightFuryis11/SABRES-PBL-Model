@@ -6,3 +6,5 @@ timezonefinder
 pandas
 scipy
 hitran-api
+numba
+matplotlib

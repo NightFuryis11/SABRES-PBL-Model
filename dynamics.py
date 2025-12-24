@@ -192,6 +192,34 @@ def poissons_T_to_theta(T : Union[int, float, np.ndarray, Quantity], p : Union[i
     
     return T * (physics.p_0/p)**((physics.R_d/physics.c_p)*(1 - 0.28 * r_v))
 
+def poissons_dT_to_dtheta(dT : Union[int, float, np.ndarray, Quantity], p : Union[int, float, np.ndarray, Quantity], r_v : Union[int, float, np.ndarray, Quantity]) -> Quantity:
+    '''
+    Parameters
+    ----------------------
+    T  -  int, float, np.ndarray, or pint.Quantity
+        The temperature of the parcel to find the potential temperature of.
+        If provided as a pint.Quantity, may be in any units of temperature. If provided as an int or float, expects units of Kelvin.
+    
+    p  -  int, float, np.ndarray, or pint.Quantity
+        The pressure of the parcel to find the potential temperature of.
+        If provided as a pint.Quantity, may be in any units of pressure. If provided as an int or float, expects units of Pascals.
+    
+    r_v  -  int, float, np.ndarray, or pint.Quantity
+        The mixing ratio of the parcel to find the potential temperature of.
+        If provided as a pint.Quantity, may be in any units of mass ratio. If provided as an int or float, expects units of kilograms per kilogram.
+    
+    Returns
+    ----------------------
+    theta  -  pint.Quantity
+        The potential temperature of the given parcel, in Kelvin.
+    '''
+
+    dT = _ensure_unit_aware_arrays(dT, "K s^(-1)")
+    p = _ensure_unit_aware_arrays(p, "Pa")
+    r_v = _ensure_unit_aware_arrays(r_v, "kg kg^(-1)")
+    
+    return dT * (physics.p_0/p)**((physics.R_d/physics.c_p)*(1 - 0.28 * r_v))
+
 def poissons_theta_to_T(theta : Union[int, float, np.ndarray, Quantity], p : Union[int, float, np.ndarray, Quantity], r_v : Union[int, float, np.ndarray, Quantity]) -> Quantity:
     '''
     Parameters
