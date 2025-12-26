@@ -44,7 +44,7 @@ def make_gif(filename : str):
 
     for i in [x.astype(np.int32) for x in np.floor(np.linspace(0, len(model_time), 50, endpoint = False))]:
         fig = plt.figure(1, figsize = (12, 18), dpi = 150)
-        fig.subplots_adjust(hspace = 0.2)
+        fig.subplots_adjust(hspace = 0.4)
         ax1 = fig.add_subplot(521)
         ax2 = fig.add_subplot(522)
         ax4 = fig.add_subplot(523)
@@ -96,7 +96,7 @@ def make_gif(filename : str):
             #ax.vlines([model_time[0]], ymin = )
 
         #fig.legend()
-        fig.suptitle(f"Frame {i}")
+        fig.suptitle(f"Frame {i}", y = 0.9)
         fig.savefig(f"SABRES-PBL-Model/gif-frames/frame{i:06d}.png", dpi = 150, bbox_inches = "tight")
         plt.close()
 
